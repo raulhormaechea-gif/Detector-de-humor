@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Detector de Humor</title>
+  <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: #0a0a0f;
+      color: #fff;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+
+    h1 {
+      font-size: 1.4rem;
+      font-weight: 300;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: #888;
+      margin-bottom: 1.5rem;
+    }
+
+    #container {
+      position: relative;
+      border-radius: 16px;
+      overflow: hidden;
+      box-shadow: 0 0 60px rgba(99, 102, 241, 0.3);
+    }
+
+    #video {
+      display: block;
+      width: 640px;
+      max-width: 90vw;
+      border-radius: 16px;
+    }
+
+    #overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+    }
+
+    #emocion-panel {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      padding: 1.5rem 2rem;
+      background: linear-gradient(transparent, rgba(0,0,0,0.85));
+      display: flex;
+      align-items: flex-end;
+      gap: 1rem;
+      min-height: 90px;
+    }
+
+    #emocion-texto {
+      font-size: 2.2rem;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      transition: all 0.4s ease;
+      text-shadow: 0 2px 20px currentColor;
+      line-height: 1;
+    }
+
+    #emocion-emoji {
+      font-size: 2.8rem;
+      line-height: 1;
+      transition: all 0.4s ease;
+    }
+
+    #confianza {
+      font-size: 0.85rem;
+      color: rgba(255,255,255,0.5);
+      align-self: flex-end;
+      padding-bottom: 4px;
+    }
+
+    #estado {
+      margin-top: 1.2rem;
+      font-size: 0.85rem;
+      color: #555;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      height: 1.2em;
+    }
+
+    .barra-emociones {
+      display: flex;
+      gap: 6px;
+      margin-top: 1rem;
+      width: 640px;
+      max-width: 90vw;
+    }
+
+    .barra-item {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .barra-fill {
+      width: 100%;
+      height: 4px;
+      background: rgba(255,255,255,0.08);
+      border-radius: 2px;
+      overflow: hidden;
+    }
+
+    .barra-fill-inner {
+      height: 100%;
+      border-radius: 2px;
+      transition: width 0.3s ease;
+    }
+
+    .barra-label {
+      font-size: 0.6rem;
+      color: #444;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+
+    /* Colores por emoción */
+    .feliz     { color: #facc15; }
+    .triste    { color: #60a5fa; }
+    .enojado   { color: #f87171; }
+    .asustado  { color: #c084fc; }
+    .disgustado{ color: #4ade80; }
+    .sorprendido{ color: #fb923c; }
+    .neutral   { color: #94a3b8; }
+    .sin-cara  { color: #444; }
+  </style>
+</head>
+<body>
+
+  <h1>Detector de Humor</h1>
+
+  <div id="container">
+    <video id="video" autoplay muted playsinline></video>
+    <canvas id="overlay"></canvas>
+    <div id="emocion-panel">
+      <div id="emocion-emoji">🎭</div>
+      <div id="emocion-texto" class="neutral">Cargando...</div>
+      <div id="confianza"></div>
+    </div>
+  </div>
+
+  <div class="barra-emociones" id="barras"></div>
+  <div id="estado">Iniciando modelos...</div>
+
+<script>
+  const MODELS_URL = 'https://raw.githubusercontent.com/justadudewhohacks/face-api.js/master/weights';
+
+  const EMOCIONES = {
+    happy:     { es: 'Feliz',       emoji: '😄', clase: 'feliz',      color: '#facc15' },
+    sad:       { es: 'Triste',      emoji: '😢', clase: 'triste',     color: '#60a5fa' },
+    angry:     { es: 'Enojado',     emoji: '😠', clase: 'enojado',    color: '#f87171' },
+    fearful:   { es: 'Asustado',    emoji: '😨', clase: 'asustado',   color: '#c084fc' },
+    disgusted: { es: 'Disgustado',  emoji: '🤢', clase: 'disgustado', color: '#4ade80' },
+    surprised: { es: 'Sorprendido', emoji: '😲', clase: 'sorprendido',color: '#fb923c' },
+    neutral:   { es: 'Neutral',     emoji: '😐', clase: 'neutral',    color: '#94a3b8' },
+  };
+
+  const video   = document.getElementById('video');
+  const overlay = document.getElementById('overlay');
+  const ctx     = overlay.getContext('2d');
+  const textoEl = document.getElementById('emocion-texto');
+  const emojiEl = document.getElementById('emocion-emoji');
+  const confEl  = document.getElementById('confianza');
+  const estadoEl= document.getElementById('estado');
+  const barrasEl= document.getElementById('barras');
+
+  // Crear barras
+  Object.entries(EMOCIONES).forEach(([key, val]) => {
+    const item = document.createElement('div');
+    item.className = 'barra-item';
+    item.innerHTML = `
+      <div class="barra-fill">
+        <div class="barra-fill-inner" id="barra-${key}" style="width:0%;background:${val.color}"></div>
+      </div>
+      <div class="barra-label">${val.es}</div>
+    `;
+    barrasEl.appendChild(item);
+  });
+
+  async function iniciar() {
+    estadoEl.textContent = 'Cargando modelos de IA...';
+    try {
+      await Promise.all([
+        faceapi.nets.tinyFaceDetector.loadFromUri(MODELS_URL),
+        faceapi.nets.faceExpressionNet.loadFromUri(MODELS_URL),
+      ]);
+      estadoEl.textContent = 'Accediendo a la cámara...';
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      video.srcObject = stream;
+      video.onloadedmetadata = () => {
+        overlay.width  = video.videoWidth;
+        overlay.height = video.videoHeight;
+        estadoEl.textContent = '';
+        detectar();
+      };
+    } catch (e) {
+      estadoEl.textContent = 'Error: ' + e.message;
+      textoEl.textContent = 'Sin acceso';
+    }
+  }
+
+  async function detectar() {
+    const opciones = new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.4 });
+    const resultados = await faceapi.detectAllFaces(video, opciones).withFaceExpressions();
+
+    ctx.clearRect(0, 0, overlay.width, overlay.height);
+
+    if (resultados.length === 0) {
+      textoEl.textContent = 'Sin rostro';
+      textoEl.className = 'sin-cara';
+      emojiEl.textContent = '🔍';
+      confEl.textContent = '';
+      Object.keys(EMOCIONES).forEach(k => {
+        document.getElementById(`barra-${k}`).style.width = '0%';
+      });
+    } else {
+      resultados.forEach(r => {
+        const box = r.detection.box;
+
+        // Dibujar recuadro
+        const emocionDom = mejorEmocion(r.expressions);
+        const color = EMOCIONES[emocionDom.nombre]?.color || '#fff';
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2;
+        ctx.shadowBlur = 10;
+        ctx.shadowColor = color;
+        ctx.strokeRect(box.x, box.y, box.width, box.height);
+        ctx.shadowBlur = 0;
+
+        // Etiqueta sobre el recuadro
+        const info = EMOCIONES[emocionDom.nombre];
+        ctx.fillStyle = color;
+        ctx.font = 'bold 16px Segoe UI';
+        ctx.fillText(`${info.emoji} ${info.es}`, box.x + 4, box.y - 8);
+      });
+
+      // Panel principal: usar el primer rostro detectado
+      const primero = resultados[0].expressions;
+      const dom = mejorEmocion(primero);
+      const info = EMOCIONES[dom.nombre];
+
+      textoEl.textContent = info.es;
+      textoEl.className = info.clase;
+      emojiEl.textContent = info.emoji;
+      confEl.textContent = (dom.valor * 100).toFixed(0) + '%';
+
+      // Actualizar barras
+      Object.entries(primero).forEach(([k, v]) => {
+        const bar = document.getElementById(`barra-${k}`);
+        if (bar) bar.style.width = (v * 100).toFixed(1) + '%';
+      });
+    }
+
+    requestAnimationFrame(detectar);
+  }
+
+  function mejorEmocion(expressions) {
+    let max = { nombre: 'neutral', valor: 0 };
+    Object.entries(expressions).forEach(([k, v]) => {
+      if (v > max.valor) max = { nombre: k, valor: v };
+    });
+    return max;
+  }
+
+  window.addEventListener('load', iniciar);
+</script>
+</body>
+</html>
